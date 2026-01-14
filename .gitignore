@@ -1,0 +1,18 @@
+# ROS 2
+.ros
+
+# Build
+build/
+install/
+log/
+
+# Dependencies
+.pio/
+
+# Editor
+.vscode/
+.idea/
+
+# Miscellaneous
+*.pyc
+*.log
