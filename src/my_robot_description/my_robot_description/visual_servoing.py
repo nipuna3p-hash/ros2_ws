@@ -21,21 +21,16 @@ class MoveItHelper:
 
     def move_to_joints(self, joint_names, target_values, timestamp):
         goal_msg = MoveGroup.Goal()
-        
-        # 1. Header (Using borrowed timestamp)
         goal_msg.request.workspace_parameters.header.frame_id = "base_link"
         goal_msg.request.workspace_parameters.header.stamp = timestamp
         goal_msg.request.group_name = "arm"
         
-        # 2. PLANNER SETTINGS (Back to OMPL)
-        # We removed "pilz" and "PTP". Default is OMPL.
-        # OMPL is much more robust against Gazebo timing issues.
-        goal_msg.request.allowed_planning_time = 5.0 
-        goal_msg.request.max_velocity_scaling_factor = 0.5
+        # OMPL Planner Settings (Robust)
+        goal_msg.request.allowed_planning_time = 2.0 
+        goal_msg.request.max_velocity_scaling_factor = 0.5 
         goal_msg.request.max_acceleration_scaling_factor = 0.5
-        goal_msg.request.num_planning_attempts = 10
+        goal_msg.request.num_planning_attempts = 5
         
-        # 3. Constraints
         goal_constraints = Constraints()
         for name, val in zip(joint_names, target_values):
             jc = JointConstraint()
@@ -48,7 +43,7 @@ class MoveItHelper:
             
         goal_msg.request.goal_constraints.append(goal_constraints)
         
-        self.node.get_logger().info(f"Sending OMPL Request... (Time: {timestamp.sec})")
+        self.node.get_logger().info(f"Sending Request... (Time: {timestamp.sec})")
         send_goal_future = self.client.send_goal_async(goal_msg)
         send_goal_future.add_done_callback(self.goal_response_callback)
 
@@ -59,20 +54,13 @@ class MoveItHelper:
             self.node.ready_for_next_move = True
             return
         
-        self.node.get_logger().info("Goal Accepted. Executing...")
+        # self.node.get_logger().info("Goal Accepted. Moving...")
         goal_handle.get_result_async().add_done_callback(self.get_result_callback)
 
     def get_result_callback(self, future):
         result = future.result().result
-        error_code = result.error_code.val
-        
-        if error_code == 1:
-            self.node.get_logger().info("Movement Complete!")
-        elif error_code == -4: # CONTROL_FAILED
-            self.node.get_logger().warn("Controller Error (Timing?). Retrying...")
-        else:
-            self.node.get_logger().error(f"Movement Failed: {error_code}")
-            
+        if result.error_code.val != 1:
+            self.node.get_logger().error(f"Movement Failed: {result.error_code.val}")
         self.node.ready_for_next_move = True 
 
 class VisualPlannerNode(Node):
@@ -89,10 +77,24 @@ class VisualPlannerNode(Node):
         
         self.create_subscription(Image, '/camera1/image_raw', self.img_cb, qos_profile_sensor_data)
         self.create_subscription(JointState, '/joint_states', self.joint_cb, qos_profile_sensor_data)
-        self.create_timer(1.0, self.planning_loop)
+        self.create_timer(0.5, self.planning_loop) 
         
-        self.TARGET_AREA = 30000
-        self.LIMITS = { "joint1": (-3.0, 3.0), "joint2": (-1.5, 1.5), "joint3": (-1.5, 1.5) }
+        # --- TUNING ---
+        self.TARGET_AREA = 30000 
+        # Direction Multipliers (1 or -1)
+        self.DIR_X = -1 
+        self.DIR_Y = -1
+        self.DIR_Z = -1
+
+        # Strict Limits to prevent "Stuck" behavior
+        # Joint 1: -3.0 to 3.0
+        # Joint 2: -1.5 to 1.5
+        # Joint 3: -1.5 to 1.5
+        self.LIMITS = { 
+            "joint1": (-3.0, 3.0), 
+            "joint2": (-1.5, 1.5), 
+            "joint3": (-1.5, 1.5) 
+        }
 
     def joint_cb(self, msg):
         for i, name in enumerate(msg.name):
@@ -103,7 +105,7 @@ class VisualPlannerNode(Node):
         self.latest_image = msg 
 
     def planning_loop(self):
-        if not self.ready_for_next_move or self.latest_image is None or not self.joints or self.latest_timestamp is None:
+        if not self.ready_for_next_move or self.latest_image is None or not self.joints:
             return
 
         cv_img = self.bridge.imgmsg_to_cv2(self.latest_image, "bgr8")
@@ -111,43 +113,77 @@ class VisualPlannerNode(Node):
         mask = cv2.inRange(hsv, np.array([90, 50, 50]), np.array([140, 255, 255]))
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+        # Draw Target Crosshair (Red)
+        cx_target, cy_target = 400, 300
+        cv2.circle(cv_img, (cx_target, cy_target), 5, (0, 0, 255), -1)
+
         if len(contours) > 0:
             c = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(c)
             M = cv2.moments(c)
             
             if M['m00'] > 0:
+                # Actual Object Center (Green)
                 cx = int(M['m10']/M['m00'])
                 cy = int(M['m01']/M['m00'])
+                cv2.circle(cv_img, (cx, cy), 10, (0, 255, 0), -1)
                 
-                error_x = 400 - cx
-                error_y = 300 - cy
+                # Calculate Errors
+                error_x = cx_target - cx
+                error_y = cy_target - cy
                 error_area = self.TARGET_AREA - area
                 
-                if abs(error_x) < 50 and abs(error_y) < 50 and abs(error_area) < 5000:
-                    self.get_logger().info("Target Aligned. Holding.")
-                    return
+                # --- CHECK 1: ARE WE ALREADY THERE? ---
+                # Tolerance: 40 pixels, Area diff: 5000
+                if abs(error_x) < 40 and abs(error_y) < 40 and abs(error_area) < 5000:
+                    cv2.putText(cv_img, "GOAL REACHED", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.imshow("Robot Eye", cv_img)
+                    cv2.waitKey(1)
+                    return # Stop planning, just wait
 
-                # Calculate Step
-                step_j1 = error_x * 0.001
-                step_j2 = -(error_y * 0.001)
-                step_j3 = -(error_area * 0.00005)
-                step_j2 = step_j2 - (step_j3 * 0.5)
-
-                target_j1 = self.clamp(self.joints["joint1"] + step_j1, *self.LIMITS["joint1"])
-                target_j2 = self.clamp(self.joints["joint2"] + step_j2, *self.LIMITS["joint2"])
-                target_j3 = self.clamp(self.joints["joint3"] + step_j3, *self.LIMITS["joint3"])
+                # --- CHECK 2: CALCULATE MOVES ---
+                step_j1 = error_x * 0.001 * self.DIR_X
+                step_j2 = error_y * 0.001 * self.DIR_Y
+                step_j3 = 0.0
                 
-                self.get_logger().info(f"Planning OMPL move...")
+                # Only move forward if we are roughly pointing at it
+                if abs(error_x) < 100 and abs(error_y) < 100:
+                    step_j3 = error_area * 0.00005 * self.DIR_Z
+                    step_j2 = step_j2 - (step_j3 * 0.5) # Compensation
+
+                # --- CHECK 3: JOINT LIMITS ---
+                next_j1 = self.joints["joint1"] + step_j1
+                next_j2 = self.joints["joint2"] + step_j2
+                next_j3 = self.joints["joint3"] + step_j3
+
+                # Check if we hit a wall
+                hit_limit = False
+                if not (self.LIMITS["joint1"][0] < next_j1 < self.LIMITS["joint1"][1]):
+                    cv2.putText(cv_img, "LIMIT J1", (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    next_j1 = self.joints["joint1"] # Don't move this joint
+                    hit_limit = True
+                
+                if not (self.LIMITS["joint2"][0] < next_j2 < self.LIMITS["joint2"][1]):
+                    cv2.putText(cv_img, "LIMIT J2", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    next_j2 = self.joints["joint2"]
+                    hit_limit = True
+
+                # Apply Clamps
+                final_j1 = self.clamp(next_j1, *self.LIMITS["joint1"])
+                final_j2 = self.clamp(next_j2, *self.LIMITS["joint2"])
+                final_j3 = self.clamp(next_j3, *self.LIMITS["joint3"])
+
+                # Execute
+                self.get_logger().info(f"Plan: J1={final_j1:.2f} J2={final_j2:.2f} J3={final_j3:.2f}")
                 self.ready_for_next_move = False 
                 
                 self.moveit.move_to_joints(
                     ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
-                    [target_j1, target_j2, target_j3, 0.0, 0.5, self.joints["joint6"]],
+                    [final_j1, final_j2, final_j3, 0.0, 0.5, self.joints["joint6"]],
                     self.latest_timestamp 
                 )
 
-        cv2.imshow("Planner View", cv_img)
+        cv2.imshow("Robot Eye", cv_img)
         cv2.waitKey(1)
 
     def clamp(self, val, min_v, max_v):
