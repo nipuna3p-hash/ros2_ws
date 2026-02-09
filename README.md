@@ -151,6 +151,7 @@ self.LIMITS = {
     *   The defined positive/negative direction of rotation for each joint in your URDF.
 *   **`LIMITS`**: A dictionary defining the safe operational range (in radians) for each joint. **These should be set to values slightly inside the actual limits defined in your URDF** to prevent MoveIt from failing to find a plan near the edge.
 *   **Color Range**: To detect a different color, modify the `np.array` values in the `cv2.inRange` function call inside `planning_loop`.
+
     ```python
     # From: Blue/Purple
     mask = cv2.inRange(hsv, np.array(), np.array())
@@ -158,3 +159,10 @@ self.LIMITS = {
     # To: Green
     # mask = cv2.inRange(hsv, np.array(), np.array())
     ```
+
+## 5. Experiments
+#### Test v1.2
+[exp1.webm](https://github.com/user-attachments/assets/43d2ace7-621f-4e93-9f57-4343f8dd2df5)
+#### Test v1.0
+[testv1.0.webm](https://github.com/user-attachments/assets/ba094020-852b-4bd3-ab8c-1e714419f5d3)
+
