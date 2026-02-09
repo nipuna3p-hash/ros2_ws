@@ -161,8 +161,10 @@ self.LIMITS = {
     ```
 
 ## 5. Experiments
-#### Test v1.2
+#### Test v1.6
 [exp1.webm](https://github.com/user-attachments/assets/43d2ace7-621f-4e93-9f57-4343f8dd2df5)
-#### Test v1.0
+#### Test v1.4
 [testv1.0.webm](https://github.com/user-attachments/assets/ba094020-852b-4bd3-ab8c-1e714419f5d3)
-
+#### Test v1.2
+#### Test v1.1
+#### Test v1.0
