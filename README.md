@@ -1,4 +1,4 @@
-# ROS 2 Visual Servoing with MoveIt
+# ROS 2 Visual Servoing with MoveIt & Gazebo
 
 This project demonstrates a basic model visual servoing system using ROS 2, OpenCV, and MoveIt. The Python script (`visual_servoing.py`) runs a ROS 2 node that controls a robot arm to center a colored object in its camera's field of view and approach it.
 
